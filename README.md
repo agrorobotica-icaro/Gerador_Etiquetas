@@ -1,5 +1,5 @@
 [README.md](https://github.com/user-attachments/files/33387323/README.md)
-# Gerador de Etiquetas ATVOS
+# Gerador de Etiquetas 
 
 Aplicativo em Streamlit para gerar etiquetas a partir de uma planilha com os SIDs selecionados e de uma planilha `QUIMICO_SIMPLES` com os dados de identificação das amostras.
 
