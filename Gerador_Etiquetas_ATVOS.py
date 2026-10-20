@@ -1,3 +1,15 @@
+################################### ICARO ALVES RAMIRO ########################################################################
+# Aplicação para gerar etiquetas e acompanhar o planejamento semanal de análises.
+# Execute o programa com: streamlit run nome_do_arquivo.py
+# Instale previamente as dependências: streamlit, openpyxl e reportlab.
+# Na aba "Gerador de Etiquetas", selecione as planilhas ETIQUETAS e QUIMICO_SIMPLES.
+# Cada célula preenchida na planilha ETIQUETAS gera uma etiqueta.
+# Na aba "Planejamento semanal", envie uma ou mais planilhas padronizadas no formato XLSX.
+# As planilhas de planejamento devem conter Ordem_de_Serviço e as colunas de análises previstas.
+# O resumo considera apenas linhas com Ordem_de_Serviço no padrão OS_número_talhão_remessa_tipo.
+# As linhas são agrupadas por número da OS, remessa e tipo; o talhão não aparece no resumo.
+# Cada análise mostra a quantidade de marcações X e o total de linhas, no formato "X - total".
+
 import io
 import re
 import zipfile
