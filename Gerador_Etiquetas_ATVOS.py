@@ -12,13 +12,11 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 
-# ================= CONFIGURAÇÃO DA PÁGINA =================
 st.set_page_config(
     page_title="Gerador de Etiquetas ATVOS",
     layout="centered",
 )
 
-# ================= IDENTIDADE VISUAL =================
 st.markdown(
     """
     <style>
@@ -50,16 +48,12 @@ st.markdown(
         font-size: 16px;
         font-weight: 600;
     }
-    .stButton > button {
-        background-color: #166534;
-    }
+    .stButton > button { background-color: #166534; }
     .stButton > button:hover {
         background-color: #14532d;
         color: white;
     }
-    .stDownloadButton > button {
-        background-color: #0F172A;
-    }
+    .stDownloadButton > button { background-color: #0F172A; }
     .stDownloadButton > button:hover {
         background-color: #1E293B;
         color: white;
@@ -71,7 +65,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ================= CABEÇALHO =================
 st.markdown(
     """
     <div class="titulo-app">Gerador de Etiquetas ATVOS</div>
@@ -81,7 +74,8 @@ st.markdown(
 )
 st.divider()
 
-# ================= LAYOUT DAS ETIQUETAS =================
+
+# Configuração das etiquetas
 LARGURA_PAGINA = 10 * cm
 ALTURA_PAGINA = 1.5 * cm
 ETIQUETAS_POR_PAGINA = 4
@@ -90,24 +84,29 @@ ESPACAMENTO_LINHAS = 1.0 * mm
 TAMANHO_FONTE = 10
 
 PARAMETROS = ("k", "m", "u", "s", "p", "c", "t", "r", "CHN")
-ROTULOS_PARAMETROS = {
-    "k": "KP Mehlich",
-    "m": "Macro",
-    "u": "Micro",
-    "s": "Enxofre",
-    "p": "pH",
-    "c": "MO",
-    "t": "Textura",
-    "r": "P Resina",
-    "CHN": "CHN",
-}
-
 PADRAO_ETIQUETA = re.compile(
     r"^\s*([A-Za-z]+)\s+(\d+)\|(\d+)\|([^|]+)\|([^|]+)\s*$"
 )
 PADRAO_OS = re.compile(
-    r"^\s*OS[_\s-]*(\d+)_([^_]+)_([^_]+)_([^_]+)\s*$",
+    r"^\s*OS[_\s-](\d+)_([^_]+)_([^_]+)_([^_]+)\s*$",
     re.IGNORECASE,
+)
+PADRAO_OS_PLANEJAMENTO = re.compile(
+    r"^\s*OS[_\s-](\d+)_([^_]+)_([^_]+)_([^_]+)\s*$",
+    re.IGNORECASE,
+)
+
+ANALISES_PLANEJAMENTO = (
+    "K_P_Mehlich",
+    "Macro",
+    "Micro",
+    "MO",
+    "pH_CaCl2",
+    "pH_H2O",
+    "P_Resina",
+    "S_ICP",
+    "S_Turbidimetria",
+    "Textura",
 )
 
 
@@ -117,6 +116,7 @@ def normalizar_cabecalho(valor):
 
 def ler_etiquetas(arquivo):
     """Lê as etiquetas preenchidas, preservando a ordem das colunas e linhas."""
+    arquivo.seek(0)
     workbook = load_workbook(arquivo, read_only=True, data_only=True)
     sheet = workbook.active
     linhas = sheet.iter_rows(values_only=True)
@@ -124,6 +124,7 @@ def ler_etiquetas(arquivo):
     indices = {nome: i for i, nome in enumerate(cabecalhos) if nome}
     ausentes = [sigla for sigla in PARAMETROS if sigla not in indices]
     if ausentes:
+        workbook.close()
         raise ValueError(
             "A planilha ETIQUETAS não contém as colunas: " + ", ".join(ausentes)
         )
@@ -134,9 +135,9 @@ def ler_etiquetas(arquivo):
             valor = linha[indices[sigla]] if indices[sigla] < len(linha) else None
             if valor is None or str(valor).strip() == "":
                 continue
-
             correspondencia = PADRAO_ETIQUETA.match(str(valor))
             if not correspondencia:
+                workbook.close()
                 raise ValueError(
                     f"Formato inválido na planilha ETIQUETAS, linha {numero_linha}, "
                     f"coluna {sigla}: {valor!r}. Esperado: "
@@ -145,6 +146,7 @@ def ler_etiquetas(arquivo):
 
             sigla_lida, sid, os_numero, remessa, tipo = correspondencia.groups()
             if sigla_lida.lower() != sigla.lower():
+                workbook.close()
                 raise ValueError(
                     f"A etiqueta {valor!r} está na coluna {sigla}, mas começa com "
                     f"'{sigla_lida}'."
@@ -168,6 +170,7 @@ def ler_etiquetas(arquivo):
 
 def ler_mapa_talhao(arquivo):
     """Mapeia (OS, remessa, tipo, SID) para Talhão_AG."""
+    arquivo.seek(0)
     workbook = load_workbook(arquivo, read_only=True, data_only=True)
     sheet = workbook.active
     linhas = sheet.iter_rows(values_only=True)
@@ -176,35 +179,33 @@ def ler_mapa_talhao(arquivo):
     obrigatorias = ("Ordem_de_Serviço", "Talhão_AG", "SID")
     ausentes = [nome for nome in obrigatorias if nome not in indices]
     if ausentes:
+        workbook.close()
         raise ValueError(
             "A planilha QUIMICO_SIMPLES não contém as colunas: "
             + ", ".join(ausentes)
         )
 
     mapa = {}
-    for numero_linha, linha in enumerate(linhas, start=2):
+    for linha in linhas:
         ordem = linha[indices["Ordem_de_Serviço"]]
         talhao_ag = linha[indices["Talhão_AG"]]
         sid = linha[indices["SID"]]
         if ordem in (None, "") or talhao_ag in (None, "") or sid in (None, ""):
             continue
-
         os_match = PADRAO_OS.match(str(ordem))
         if not os_match:
             continue
-
         os_numero, _talhao_do_nome, remessa, tipo = os_match.groups()
         chave = (os_numero, remessa.upper(), tipo.upper(), int(sid))
         valor = str(talhao_ag).strip()
-
         if chave in mapa and mapa[chave] != valor:
+            workbook.close()
             raise ValueError(
                 "A planilha QUIMICO_SIMPLES tem mais de um Talhão_AG para "
                 f"OS {os_numero}, {remessa}, {tipo}, SID {int(sid)} "
-                f"(linhas {mapa[chave]!r} e {valor!r})."
+                f"(valores {mapa[chave]!r} e {valor!r})."
             )
         mapa[chave] = valor
-
     workbook.close()
     return mapa
 
@@ -247,13 +248,14 @@ def registrar_fontes():
     fonte_negrito = "Helvetica-Bold"
     fonte_normal_path = Path(r"C:\Windows\Fonts\times.ttf")
     fonte_negrito_path = Path(r"C:\Windows\Fonts\timesbd.ttf")
-
     if fonte_normal_path.exists() and fonte_negrito_path.exists():
         try:
             if "TimesNewRoman" not in pdfmetrics.getRegisteredFontNames():
                 pdfmetrics.registerFont(TTFont("TimesNewRoman", str(fonte_normal_path)))
             if "TimesNewRomanBold" not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont("TimesNewRomanBold", str(fonte_negrito_path)))
+                pdfmetrics.registerFont(
+                    TTFont("TimesNewRomanBold", str(fonte_negrito_path))
+                )
             fonte_normal = "TimesNewRoman"
             fonte_negrito = "TimesNewRomanBold"
         except Exception:
@@ -267,16 +269,10 @@ def desenhar_pagina(pdf, etiquetas_pagina, fontes):
     for indice, etiqueta in enumerate(etiquetas_pagina):
         x_centro = indice * LARGURA_ETIQUETA + LARGURA_ETIQUETA / 2
         y_centro = ALTURA_PAGINA / 2
-
         pdf.setFont(fonte_negrito, TAMANHO_FONTE)
         pdf.drawCentredString(x_centro, y_centro + passo_linha, etiqueta["linha1"])
-
-        pdf.setFont(fonte_negrito, TAMANHO_FONTE)
         pdf.drawCentredString(x_centro, y_centro, etiqueta["linha2"])
-
-        pdf.setFont(fonte_negrito, TAMANHO_FONTE)
         pdf.drawCentredString(x_centro, y_centro - passo_linha, etiqueta["linha3"])
-
     pdf.showPage()
 
 
@@ -285,20 +281,12 @@ def gerar_pdf(etiquetas, fontes):
     grupos = defaultdict(list)
     for etiqueta in etiquetas:
         grupos[(etiqueta["sigla"], etiqueta["tipo"])].append(etiqueta)
-
     arquivos_pdf = {}
     for (sigla, tipo), itens in grupos.items():
         buffer_pdf = io.BytesIO()
-        pdf = canvas.Canvas(
-            buffer_pdf,
-            pagesize=(LARGURA_PAGINA, ALTURA_PAGINA),
-        )
+        pdf = canvas.Canvas(buffer_pdf, pagesize=(LARGURA_PAGINA, ALTURA_PAGINA))
         for inicio in range(0, len(itens), ETIQUETAS_POR_PAGINA):
-            desenhar_pagina(
-                pdf,
-                itens[inicio : inicio + ETIQUETAS_POR_PAGINA],
-                fontes,
-            )
+            desenhar_pagina(pdf, itens[inicio : inicio + ETIQUETAS_POR_PAGINA], fontes)
         pdf.save()
         buffer_pdf.seek(0)
         arquivos_pdf[f"Etiquetas_{sigla}_{tipo}.pdf"] = buffer_pdf.getvalue()
@@ -314,50 +302,142 @@ def gerar_zip(arquivos_pdf):
     return buffer_zip.getvalue()
 
 
-# ================= ENTRADAS =================
-st.subheader("Selecione as planilhas")
-arquivo_etiquetas = st.file_uploader(
-    "Planilha ETIQUETAS",
-    type=["xlsx"],
-    help="Planilha com os SIDs selecionados, organizados em colunas por parâmetro.",
-)
-arquivo_quimico = st.file_uploader(
-    "Planilha QUIMICO_SIMPLES",
-    type=["xlsx"],
-    help="Planilha usada para localizar o Talhão_AG de cada OS e SID.",
+def gerar_tabela_planejamento(arquivos):
+    """Conta marcações X por OS/remessa/tipo e devolve cada valor como X - total."""
+    totais = defaultdict(lambda: {"total": 0, **{a: 0 for a in ANALISES_PLANEJAMENTO}})
+    problemas = []
+
+    for arquivo in arquivos:
+        arquivo.seek(0)
+        workbook = load_workbook(arquivo, read_only=True, data_only=True)
+        sheet = workbook.active
+        linhas = sheet.iter_rows(values_only=True)
+        cabecalhos = [normalizar_cabecalho(v) for v in next(linhas, ())]
+        indices = {nome: i for i, nome in enumerate(cabecalhos) if nome}
+        obrigatorias = ("Ordem_de_Serviço",) + ANALISES_PLANEJAMENTO
+        ausentes = [nome for nome in obrigatorias if nome not in indices]
+        if ausentes:
+            problemas.append(f"{arquivo.name}: faltam as colunas {', '.join(ausentes)}")
+            workbook.close()
+            continue
+
+        for numero_linha, linha in enumerate(linhas, start=2):
+            ordem = linha[indices["Ordem_de_Serviço"]]
+            if ordem is None or not str(ordem).strip():
+                continue
+            correspondencia = PADRAO_OS_PLANEJAMENTO.match(str(ordem))
+            if not correspondencia:
+                # Linhas sem identificação padronizada não entram no total.
+                continue
+            numero_os, _talhao, remessa, tipo = correspondencia.groups()
+            chave_os = (numero_os, remessa.strip().upper(), tipo.strip().upper())
+            grupo = totais[chave_os]
+            grupo["total"] += 1
+            for analise in ANALISES_PLANEJAMENTO:
+                valor = linha[indices[analise]] if indices[analise] < len(linha) else None
+                if str(valor).strip().upper() == "X":
+                    grupo[analise] += 1
+        workbook.close()
+
+    if problemas:
+        raise ValueError("\n".join(problemas))
+    if not totais:
+        return []
+
+    tabela = []
+    for chave_os in sorted(totais, key=lambda chave: (int(chave[0]), chave[1], chave[2])):
+        numero_os, remessa, tipo = chave_os
+        grupo = totais[chave_os]
+        total = grupo["total"]
+        linha = {"Ordem de Serviço": f"{numero_os}{remessa}{tipo}"}
+        for analise in ANALISES_PLANEJAMENTO:
+            linha[analise] = f"{grupo[analise]} - {total}"
+        tabela.append(linha)
+    return tabela
+
+
+aba_etiquetas, aba_planejamento = st.tabs(
+    ["Gerador de Etiquetas", "Planejamento semanal"]
 )
 
-st.caption(
-    "Cada célula preenchida da planilha ETIQUETAS gera uma etiqueta. "
-    "A identificação do Talhão_AG é feita pela OS, remessa, tipo de análise e SID."
-)
+with aba_etiquetas:
+    st.subheader("Selecione as planilhas")
+    arquivo_etiquetas = st.file_uploader(
+        "Planilha ETIQUETAS",
+        type=["xlsx"],
+        help="Planilha com os SIDs selecionados, organizados em colunas por parâmetro.",
+        key="arquivo_etiquetas",
+    )
+    arquivo_quimico = st.file_uploader(
+        "Planilha QUIMICO_SIMPLES",
+        type=["xlsx"],
+        help="Planilha usada para localizar o Talhão_AG de cada OS e SID.",
+        key="arquivo_quimico",
+    )
+    st.caption(
+        "Cada célula preenchida da planilha ETIQUETAS gera uma etiqueta. "
+        "A identificação do Talhão_AG é feita pela OS, remessa, tipo de análise e SID."
+    )
 
-if st.button("Gerar etiquetas"):
-    if arquivo_etiquetas is None or arquivo_quimico is None:
-        st.error("Selecione as duas planilhas para continuar.")
-    else:
+    if st.button("Gerar etiquetas", key="botao_gerar_etiquetas"):
+        if arquivo_etiquetas is None or arquivo_quimico is None:
+            st.error("Selecione as duas planilhas para continuar.")
+        else:
+            try:
+                etiquetas = ler_etiquetas(arquivo_etiquetas)
+                if not etiquetas:
+                    st.error("Não encontrei etiquetas preenchidas na planilha ETIQUETAS.")
+                else:
+                    mapa_talhao = ler_mapa_talhao(arquivo_quimico)
+                    etiquetas = associar_talhoes(etiquetas, mapa_talhao)
+                    arquivos_pdf = gerar_pdf(etiquetas, registrar_fontes())
+                    zip_bytes = gerar_zip(arquivos_pdf)
+                    st.success(
+                        f"Foram geradas {len(etiquetas)} etiquetas em "
+                        f"{len(arquivos_pdf)} PDF(s)."
+                    )
+                    st.download_button(
+                        label="Baixar PDFs em ZIP",
+                        data=zip_bytes,
+                        file_name="Etiquetas_ATVOS.zip",
+                        mime="application/zip",
+                    )
+            except (ValueError, KeyError, IndexError) as erro:
+                st.error(str(erro))
+            except Exception as erro:
+                st.error(f"Não foi possível gerar as etiquetas: {erro}")
+
+with aba_planejamento:
+    st.subheader("Planejamento semanal")
+    planilhas_planejamento = st.file_uploader(
+        "Selecione uma ou mais planilhas padronizadas",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        help=(
+            "A tabela reúne as linhas de todas as planilhas e agrupa pela OS. "
+            "Cada célula mostra a quantidade de X e o total de linhas da OS/remessa/tipo."
+        ),
+        key="planilhas_planejamento",
+    )
+    st.caption(
+        "Exemplo: 30 marcações de uma análise em 100 linhas serão exibidas como 30 - 100. "
+        "Linhas sem Ordem_de_Serviço no padrão OS_331_A1_R1_F são ignoradas."
+    )
+
+    if planilhas_planejamento:
         try:
-            etiquetas = ler_etiquetas(arquivo_etiquetas)
-            if not etiquetas:
-                st.error("Não encontrei etiquetas preenchidas na planilha ETIQUETAS.")
+            tabela_planejamento = gerar_tabela_planejamento(planilhas_planejamento)
+            if tabela_planejamento:
+                st.dataframe(
+                    tabela_planejamento,
+                    hide_index=True,
+                    use_container_width=True,
+                )
             else:
-                mapa_talhao = ler_mapa_talhao(arquivo_quimico)
-                etiquetas = associar_talhoes(etiquetas, mapa_talhao)
-                fontes = registrar_fontes()
-                arquivos_pdf = gerar_pdf(etiquetas, fontes)
-                zip_bytes = gerar_zip(arquivos_pdf)
-
-                st.success(
-                    f"Foram geradas {len(etiquetas)} etiquetas em "
-                    f"{len(arquivos_pdf)} PDF(s)."
-                )
-                st.download_button(
-                    label="Baixar PDFs em ZIP",
-                    data=zip_bytes,
-                    file_name="Etiquetas_ATVOS.zip",
-                    mime="application/zip",
-                )
+                st.info("Não encontrei linhas com Ordem_de_Serviço padronizada.")
         except (ValueError, KeyError, IndexError) as erro:
             st.error(str(erro))
         except Exception as erro:
-            st.error(f"Não foi possível gerar as etiquetas: {erro}")
+            st.error(f"Não foi possível montar o planejamento: {erro}")
+    else:
+        st.info("Envie as planilhas para montar o resumo por OS e análise.")
