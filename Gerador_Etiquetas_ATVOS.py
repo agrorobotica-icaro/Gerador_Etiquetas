@@ -5,6 +5,7 @@
 # Na aba "Gerador de Etiquetas", selecione as planilhas ETIQUETAS e QUIMICO_SIMPLES.
 # Cada célula preenchida na planilha ETIQUETAS gera uma etiqueta.
 # Na aba "Planejamento semanal", envie uma ou mais planilhas padronizadas no formato XLSX.
+# Na aba "Intervalo Semanal de Amostras por OS", os intervalos de SID consideram apenas células com X.
 # As planilhas de planejamento devem conter Ordem_de_Serviço e as colunas de análises previstas.
 # O resumo considera apenas linhas com Ordem_de_Serviço no padrão OS_número_talhão_remessa_tipo.
 # As linhas são agrupadas por número da OS, remessa e tipo; o talhão não aparece no resumo.
@@ -120,6 +121,15 @@ ANALISES_PLANEJAMENTO = (
     "S_Turbidimetria",
     "Textura",
 )
+
+ANALISES_INTERVALO = {
+    "Macro": ("Macro",),
+    "Micro": ("Micro",),
+    "Enxofre": ("S_ICP", "S_Turbidimetria"),
+    "pH": ("pH_CaCl2", "pH_H2O"),
+    "MO": ("MO",),
+    "Resina": ("P_Resina",),
+}
 
 
 def normalizar_cabecalho(valor):
@@ -371,8 +381,110 @@ def gerar_tabela_planejamento(arquivos):
     return tabela
 
 
-aba_etiquetas, aba_planejamento = st.tabs(
-    ["Gerador de Etiquetas", "Planejamento semanal"]
+def gerar_tabela_intervalo(arquivos):
+    """Resume, por OS e Unidade, o menor e o maior SID marcado com X."""
+    intervalos = defaultdict(
+        lambda: {analise: set() for analise in ANALISES_INTERVALO}
+    )
+    problemas = []
+
+    for arquivo in arquivos:
+        arquivo.seek(0)
+        workbook = load_workbook(arquivo, read_only=True, data_only=True)
+        sheet = workbook.active
+        linhas = sheet.iter_rows(values_only=True)
+        cabecalhos = [normalizar_cabecalho(valor) for valor in next(linhas, ())]
+        indices = {nome: indice for indice, nome in enumerate(cabecalhos) if nome}
+
+        obrigatorias = ("Ordem_de_Serviço", "Unidade", "SID")
+        ausentes = [nome for nome in obrigatorias if nome not in indices]
+        analises_ausentes = [
+            nome
+            for nome, colunas in ANALISES_INTERVALO.items()
+            if not any(coluna in indices for coluna in colunas)
+        ]
+        if ausentes or analises_ausentes:
+            detalhes = ausentes + analises_ausentes
+            problemas.append(
+                f"{arquivo.name}: faltam as colunas {', '.join(detalhes)}"
+            )
+            workbook.close()
+            continue
+
+        for numero_linha, linha in enumerate(linhas, start=2):
+            ordem = linha[indices["Ordem_de_Serviço"]]
+            unidade_valor = linha[indices["Unidade"]]
+            if ordem is None or unidade_valor is None:
+                continue
+
+            correspondencia = PADRAO_OS_PLANEJAMENTO.match(str(ordem))
+            if not correspondencia:
+                continue
+            numero_os = int(correspondencia.group(1))
+            unidade = str(unidade_valor).strip()
+            if not unidade:
+                continue
+
+            marcacoes = []
+            for analise, colunas in ANALISES_INTERVALO.items():
+                marcado = any(
+                    coluna in indices
+                    and indices[coluna] < len(linha)
+                    and str(linha[indices[coluna]]).strip().upper() == "X"
+                    for coluna in colunas
+                )
+                marcacoes.append(marcado)
+
+            if not any(marcacoes):
+                continue
+
+            valor_sid = linha[indices["SID"]]
+            try:
+                sid_float = float(str(valor_sid).strip().replace(",", "."))
+                if not sid_float.is_integer() or sid_float < 0:
+                    raise ValueError
+                sid = int(sid_float)
+            except (TypeError, ValueError):
+                problemas.append(
+                    f"{arquivo.name}: SID inválido na linha {numero_linha}: "
+                    f"{valor_sid!r}"
+                )
+                continue
+
+            chave = (numero_os, unidade)
+            for (analise, colunas), marcado in zip(
+                ANALISES_INTERVALO.items(), marcacoes
+            ):
+                if marcado:
+                    intervalos[chave][analise].add(sid)
+        workbook.close()
+
+    if problemas:
+        raise ValueError("\n".join(problemas))
+    if not intervalos:
+        return []
+
+    tabela = []
+    for numero_os, unidade in sorted(intervalos, key=lambda chave: (chave[0], chave[1])):
+        linha = {
+            "Ordem de Serviço": f"{numero_os:03d}",
+            "Unidade": unidade,
+        }
+        for analise in ANALISES_INTERVALO:
+            sids = intervalos[(numero_os, unidade)][analise]
+            linha[analise] = (
+                f"{min(sids):03d} - {max(sids):03d}" if sids else ""
+            )
+        tabela.append(linha)
+    return tabela
+
+
+aba_etiquetas, aba_planejamento, aba_intervalo = st.tabs(
+    [
+        "Gerador de Etiquetas",
+        "Planejamento semanal",
+        "Intervalo Semanal de Amostras por OS",
+    ]
 )
 
 with aba_etiquetas:
@@ -462,3 +574,39 @@ with aba_planejamento:
             st.error(f"Não foi possível montar o planejamento: {erro}")
     else:
         st.info("Envie as planilhas para montar o resumo por OS e análise.")
+
+with aba_intervalo:
+    st.subheader("Intervalo Semanal de Amostras por OS")
+    planilhas_intervalo = st.file_uploader(
+        "Selecione uma ou mais planilhas padronizadas",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        help=(
+            "O intervalo é calculado por OS e Unidade, usando o menor e o maior SID "
+            "com X em cada análise. Para Enxofre, é usada a coluna disponível entre "
+            "S_ICP e S_Turbidimetria; para pH, entre pH_CaCl2 e pH_H2O."
+        ),
+        key="planilhas_intervalo",
+    )
+    st.caption(
+        "Somente linhas marcadas com X entram no intervalo. Os SIDs são exibidos "
+        "com três dígitos, por exemplo: 001 - 069."
+    )
+
+    if planilhas_intervalo:
+        try:
+            tabela_intervalo = gerar_tabela_intervalo(planilhas_intervalo)
+            if tabela_intervalo:
+                st.dataframe(
+                    tabela_intervalo,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            else:
+                st.info("Não encontrei linhas marcadas com X e OS padronizada.")
+        except (ValueError, KeyError, IndexError) as erro:
+            st.error(str(erro))
+        except Exception as erro:
+            st.error(f"Não foi possível calcular os intervalos: {erro}")
+    else:
+        st.info("Envie as planilhas para calcular os intervalos de SID por OS.")
