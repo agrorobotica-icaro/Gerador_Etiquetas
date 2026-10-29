@@ -367,9 +367,8 @@ def gerar_tabela_planejamento(arquivos):
         return []
 
     tabela = []
-    for chave_os in sorted(totais, key=lambda chave: (int(chave[0]), chave[1], chave[2])):
+    for chave_os, grupo in totais.items():
         numero_os, remessa, tipo = chave_os
-        grupo = totais[chave_os]
         total = grupo["total"]
         linha = {
             "Ordem de Serviço": f"{numero_os}{remessa}{tipo}",
@@ -420,10 +419,14 @@ def gerar_tabela_intervalo(arquivos):
             correspondencia = PADRAO_OS_PLANEJAMENTO.match(str(ordem))
             if not correspondencia:
                 continue
-            numero_os = int(correspondencia.group(1))
+            numero_os, _talhao, remessa, tipo = correspondencia.groups()
+            remessa = remessa.strip().upper()
+            tipo = tipo.strip().upper()
             unidade = str(unidade_valor).strip()
             if not unidade:
                 continue
+            chave = (numero_os, remessa, tipo, unidade)
+            sids_por_analise = intervalos[chave]
 
             marcacoes = []
             for analise, colunas in ANALISES_INTERVALO.items():
@@ -451,12 +454,11 @@ def gerar_tabela_intervalo(arquivos):
                 )
                 continue
 
-            chave = (numero_os, unidade)
             for (analise, colunas), marcado in zip(
                 ANALISES_INTERVALO.items(), marcacoes
             ):
                 if marcado:
-                    intervalos[chave][analise].add(sid)
+                    sids_por_analise[analise].add(sid)
         workbook.close()
 
     if problemas:
@@ -465,13 +467,16 @@ def gerar_tabela_intervalo(arquivos):
         return []
 
     tabela = []
-    for numero_os, unidade in sorted(intervalos, key=lambda chave: (chave[0], chave[1])):
+    for chave, sids_por_analise in intervalos.items():
+        if not any(sids_por_analise.values()):
+            continue
+        numero_os, remessa, tipo, unidade = chave
         linha = {
-            "Ordem de Serviço": f"{numero_os:03d}",
             "Unidade": unidade,
+            "Ordem de Serviço": f"{numero_os}{remessa}{tipo}",
         }
         for analise in ANALISES_INTERVALO:
-            sids = intervalos[(numero_os, unidade)][analise]
+            sids = sids_por_analise[analise]
             linha[analise] = (
                 f"{min(sids):03d} - {max(sids):03d}" if sids else ""
             )
