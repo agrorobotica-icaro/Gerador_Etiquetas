@@ -8,7 +8,7 @@
 # As planilhas de planejamento devem conter Ordem_de_Serviço e as colunas de análises previstas.
 # O resumo considera apenas linhas com Ordem_de_Serviço no padrão OS_número_talhão_remessa_tipo.
 # As linhas são agrupadas por número da OS, remessa e tipo; o talhão não aparece no resumo.
-# Cada análise mostra a quantidade de marcações X e o total de linhas, no formato "X - total".
+# Cada análise mostra a quantidade de marcações X; a coluna Total mostra o total de linhas.
 
 import io
 import re
@@ -315,7 +315,7 @@ def gerar_zip(arquivos_pdf):
 
 
 def gerar_tabela_planejamento(arquivos):
-    """Conta marcações X por OS/remessa/tipo e devolve cada valor como X - total."""
+    """Conta marcações X e total de linhas por OS/remessa/tipo."""
     totais = defaultdict(lambda: {"total": 0, **{a: 0 for a in ANALISES_PLANEJAMENTO}})
     problemas = []
 
@@ -361,9 +361,12 @@ def gerar_tabela_planejamento(arquivos):
         numero_os, remessa, tipo = chave_os
         grupo = totais[chave_os]
         total = grupo["total"]
-        linha = {"Ordem de Serviço": f"{numero_os}{remessa}{tipo}"}
+        linha = {
+            "Ordem de Serviço": f"{numero_os}{remessa}{tipo}",
+            "Total": total,
+        }
         for analise in ANALISES_PLANEJAMENTO:
-            linha[analise] = f"{grupo[analise]} - {total}"
+            linha[analise] = grupo[analise]
         tabela.append(linha)
     return tabela
 
@@ -392,6 +395,7 @@ with aba_etiquetas:
     )
 
     if st.button("Gerar etiquetas", key="botao_gerar_etiquetas"):
+        st.session_state.pop("etiquetas_zip", None)
         if arquivo_etiquetas is None or arquivo_quimico is None:
             st.error("Selecione as duas planilhas para continuar.")
         else:
@@ -403,21 +407,24 @@ with aba_etiquetas:
                     mapa_talhao = ler_mapa_talhao(arquivo_quimico)
                     etiquetas = associar_talhoes(etiquetas, mapa_talhao)
                     arquivos_pdf = gerar_pdf(etiquetas, registrar_fontes())
-                    zip_bytes = gerar_zip(arquivos_pdf)
+                    st.session_state["etiquetas_zip"] = gerar_zip(arquivos_pdf)
                     st.success(
                         f"Foram geradas {len(etiquetas)} etiquetas em "
                         f"{len(arquivos_pdf)} PDF(s)."
-                    )
-                    st.download_button(
-                        label="Baixar PDFs em ZIP",
-                        data=zip_bytes,
-                        file_name="Etiquetas_ATVOS.zip",
-                        mime="application/zip",
                     )
             except (ValueError, KeyError, IndexError) as erro:
                 st.error(str(erro))
             except Exception as erro:
                 st.error(f"Não foi possível gerar as etiquetas: {erro}")
+
+    if "etiquetas_zip" in st.session_state:
+        st.download_button(
+            label="Baixar PDFs em ZIP",
+            data=st.session_state["etiquetas_zip"],
+            file_name="Etiquetas_ATVOS.zip",
+            mime="application/zip",
+            key="download_etiquetas_zip",
+        )
 
 with aba_planejamento:
     st.subheader("Planejamento semanal")
@@ -427,12 +434,14 @@ with aba_planejamento:
         accept_multiple_files=True,
         help=(
             "A tabela reúne as linhas de todas as planilhas e agrupa pela OS. "
-            "Cada célula mostra a quantidade de X e o total de linhas da OS/remessa/tipo."
+            "A coluna Total mostra o número de linhas da OS/remessa/tipo; "
+            "as colunas de análise mostram a quantidade de X."
         ),
         key="planilhas_planejamento",
     )
     st.caption(
-        "Exemplo: 30 marcações de uma análise em 100 linhas serão exibidas como 30 - 100. "
+        "Exemplo: 30 marcações em 100 linhas serão exibidas como 30 na análise e "
+        "100 na coluna Total. "
         "Linhas sem Ordem_de_Serviço no padrão OS_331_A1_R1_F são ignoradas."
     )
 
